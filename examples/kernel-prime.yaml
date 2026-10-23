@@ -1,0 +1,13 @@
+version: "0.2"
+name: prime-demo
+pods:
+  - id: ops
+    label: General
+    members:
+      - id: general-task
+        agent_ref: local:agents/general-worker
+        runtime: prime-agent
+        model: your-model-id
+        profile: default
+        cwd: .
+        restore_policy: resume_if_possible
