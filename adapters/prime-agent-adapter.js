@@ -38,8 +38,14 @@ export class PrimeAgentAdapter {
     async project(plan, binding) {
         // prime-agent reads skills from .agents/skills/ in cwd (projected by OpenRig workspace layer).
         // This adapter is a no-op: acknowledge all entries to avoid projection-failed warnings.
-        const projected = (plan.entries ?? []).map((e) => e.effectiveId);
-        return { projected, skipped: [], failed: [] };
+        const projected = [];
+        const failed = [];
+        for (const e of plan.entries ?? []) {
+            const target = nodePath.join(binding.cwd, ".agents", "skills", e.effectiveId, "SKILL.md");
+            if (this.fsOps.exists(target)) projected.push(e.effectiveId);
+            else failed.push({ effectiveId: e.effectiveId, error: `skill not materialized at runtime target: ${target}` });
+        }
+        return { projected, skipped: [], failed };
     }
     async deliverStartup(files, binding, sendInteractiveText) {
         let delivered = 0;
@@ -60,15 +66,23 @@ export class PrimeAgentAdapter {
                     warnings.push(`skipped optional ${file.path}: unreadable`);
                     continue;
                 }
-                if (hint === "send_text" && sendInteractiveText) {
+                if (hint === "send_text") {
+                    if (!sendInteractiveText) {
+                        if (file.required) {
+                            failed.push({ path: file.path, error: "no interactive channel available" });
+                        } else {
+                            warnings.push(`optional ${file.path}: no interactive channel available`);
+                        }
+                        continue;
+                    }
                     await sendInteractiveText(content);
                     delivered++;
                 }
                 else {
                     // guidance_merge / skill_install: prime-agent reads these from disk on its own.
-                    // We just deliver the path so the agent knows where to look.
+                    // Deliver the absolute path so the agent can resolve files outside binding.cwd.
                     if (sendInteractiveText) {
-                        await sendInteractiveText(`Read ${file.path} before doing anything else.`);
+                        await sendInteractiveText(`Read ${file.absolutePath} before doing anything else.`);
                     }
                     delivered++;
                 }
@@ -117,8 +131,12 @@ export class PrimeAgentAdapter {
             if (!content) {
                 return { ready: false, reason: "pane is empty", code: "pane_empty" };
             }
-            // prime-agent TUI shows a status bar with model info and a manage prompt
-            if (content.includes("manage") || content.includes("prime-agent") || content.includes("·") && content.includes("%")) {
+            // Only TUI-specific signals count as ready. The echoed launch command
+            // (e.g. `prime-agent --thinking low`) is stripped from consideration so a
+            // failed/exited launch can never satisfy readiness.
+            const lines = content.split("\n").filter((l) => !l.includes("prime-agent --"));
+            const pane = lines.join("\n");
+            if (pane.includes("\u2190 manage") || /\u00b7\s*\d+%/.test(pane)) {
                 return { ready: true };
             }
             // Shell prompt = agent not launched yet
